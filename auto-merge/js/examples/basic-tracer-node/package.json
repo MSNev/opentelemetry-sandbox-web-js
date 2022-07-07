@@ -1,0 +1,43 @@
+{
+  "name": "example-basic-tracer-node",
+  "private": true,
+  "version": "0.3.3",
+  "description": "Example of using @opentelemetry/tracing in Node.js",
+  "main": "index.js",
+  "scripts": {
+    "zipkin:basic": "cross-env EXPORTER=zipkin node ./index.js",
+    "jaeger:basic": "cross-env EXPORTER=jaeger node ./index.js",
+    "collector:basic": "cross-env EXPORTER=collector node ./index.js",
+    "collector:docker:ot": "cd ./docker/ot && docker-compose down && docker-compose up",
+    "collector:docker:stop": "cd ./docker/ot && docker-compose down",
+    "multi_exporter": "node ./multi_exporter.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/open-telemetry/opentelemetry-js.git"
+  },
+  "keywords": [
+    "opentelemetry",
+    "http",
+    "tracing"
+  ],
+  "engines": {
+    "node": ">=8"
+  },
+  "author": "OpenTelemetry Authors",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/open-telemetry/opentelemetry-js/issues"
+  },
+  "dependencies": {
+    "@opentelemetry/core": "^0.3.3",
+    "@opentelemetry/exporter-collector": "^0.3.3",
+    "@opentelemetry/exporter-jaeger": "^0.3.3",
+    "@opentelemetry/exporter-zipkin": "^0.3.3",
+    "@opentelemetry/tracing": "^0.3.3"
+  },
+  "homepage": "https://github.com/open-telemetry/opentelemetry-js#readme",
+  "devDependencies": {
+    "cross-env": "^6.0.0"
+  }
+}

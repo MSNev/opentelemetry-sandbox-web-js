@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,43 +14,50 @@
  * limitations under the License.
  */
 
-import { SpanExporter, ReadableSpan } from '@opentelemetry/tracing';
-import { ExportResult } from '@opentelemetry/base';
-import * as jaegerTypes from './types';
-import { NoopLogger } from '@opentelemetry/core';
-import * as types from '@opentelemetry/types';
+import { diag } from '@opentelemetry/api';
+import { BindOnceFuture, ExportResult, ExportResultCode, getEnv } from '@opentelemetry/core';
+import { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { Socket } from 'dgram';
+import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { spanToThrift } from './transform';
-import { unrefTimer } from '@opentelemetry/core';
+import * as jaegerTypes from './types';
 
 /**
  * Format and sends span information to Jaeger Exporter.
  */
 export class JaegerExporter implements SpanExporter {
-  private readonly _logger: types.Logger;
-  private readonly _process: jaegerTypes.ThriftProcess;
-  private readonly _sender: typeof jaegerTypes.UDPSender;
-  private readonly _forceFlush: boolean = true;
-  private readonly _flushTimeout: number;
-  private _timer: NodeJS.Timeout;
+  private readonly _onShutdownFlushTimeout: number;
+  private readonly _localConfig: jaegerTypes.ExporterConfig;
+  private _shutdownOnce: BindOnceFuture<void>;
 
-  constructor(config: jaegerTypes.ExporterConfig) {
-    this._logger = config.logger || new NoopLogger();
-    const tags: jaegerTypes.Tag[] = config.tags || [];
-    if (config.forceFlush !== undefined) {
-      this._forceFlush = config.forceFlush;
-    }
-    this._flushTimeout = config.flushTimeout || 2000;
+  private _sender?: typeof jaegerTypes.UDPSender;
 
-    this._sender = new jaegerTypes.UDPSender(config);
-    this._process = {
-      serviceName: config.serviceName,
-      tags: jaegerTypes.ThriftUtils.getThriftTags(tags),
-    };
-    this._sender.setProcess(this._process);
+  constructor(config?: jaegerTypes.ExporterConfig) {
+    const localConfig = Object.assign({}, config);
+    this._onShutdownFlushTimeout =
+      typeof localConfig.flushTimeout === 'number'
+        ? localConfig.flushTimeout
+        : 2000;
 
-    const flushInterval = config.flushInterval || 5000;
-    this._timer = setInterval(this._flush.bind(this), flushInterval);
-    unrefTimer(this._timer);
+    // https://github.com/jaegertracing/jaeger-client-node#environment-variables
+    // By default, the client sends traces via UDP to the agent at localhost:6832. Use OTEL_EXPORTER_JAEGER_AGENT_HOST and
+    // JAEGER_AGENT_PORT to send UDP traces to a different host:port. If OTEL_EXPORTER_JAEGER_ENDPOINT is set, the client sends traces
+    // to the endpoint via HTTP, making the OTEL_EXPORTER_JAEGER_AGENT_HOST and JAEGER_AGENT_PORT unused. If OTEL_EXPORTER_JAEGER_ENDPOINT is secured,
+    // HTTP basic authentication can be performed by setting the OTEL_EXPORTER_JAEGER_USER and OTEL_EXPORTER_JAEGER_PASSWORD environment variables.
+
+    const env = getEnv();
+    localConfig.endpoint =
+      localConfig.endpoint || env.OTEL_EXPORTER_JAEGER_ENDPOINT;
+    localConfig.username =
+      localConfig.username || env.OTEL_EXPORTER_JAEGER_USER;
+    localConfig.password =
+      localConfig.password || env.OTEL_EXPORTER_JAEGER_PASSWORD;
+    localConfig.host = localConfig.host || env.OTEL_EXPORTER_JAEGER_AGENT_HOST;
+    localConfig.port = localConfig.port || env.OTEL_EXPORTER_JAEGER_AGENT_PORT;
+
+    this._localConfig = localConfig;
+
+    this._shutdownOnce = new BindOnceFuture(this._shutdown, this);
   }
 
   /** Exports a list of spans to Jaeger. */
@@ -58,48 +65,104 @@ export class JaegerExporter implements SpanExporter {
     spans: ReadableSpan[],
     resultCallback: (result: ExportResult) => void
   ): void {
-    this._logger.debug('Jaeger exporter export');
-    return this._sendSpans(spans, resultCallback);
+    if (this._shutdownOnce.isCalled) {
+      return;
+    }
+    if (spans.length === 0) {
+      return resultCallback({ code: ExportResultCode.SUCCESS });
+    }
+    diag.debug('Jaeger exporter export');
+    this._sendSpans(spans, resultCallback).catch(error => {
+      return resultCallback({ code: ExportResultCode.FAILED, error });
+    });
   }
 
   /** Shutdown exporter. */
-  shutdown(): void {
-    if (!this._forceFlush) return;
-    // Make an optimistic flush.
-    this._flush();
-    // Sleeping x seconds before closing the sender's connection to ensure
-    // all spans are flushed.
-    setTimeout(() => {
-      this._sender.close();
-    }, this._flushTimeout);
+  shutdown(): Promise<void> {
+    return this._shutdownOnce.call();
+  }
+
+  private _shutdown(): Promise<void> {
+    return Promise.race([
+      new Promise<void>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('Flush timeout')), this._onShutdownFlushTimeout);
+      }),
+      this._flush(),
+    ]).finally(() => {
+      this._sender?.close();
+    });
   }
 
   /** Transform spans and sends to Jaeger service. */
-  private _sendSpans(
+  private async _sendSpans(
     spans: ReadableSpan[],
     done?: (result: ExportResult) => void
   ) {
     const thriftSpan = spans.map(span => spanToThrift(span));
     for (const span of thriftSpan) {
-      this._sender.append(span, (numSpans: number, err?: string) => {
-        if (err) {
-          // @todo: decide whether to break out the loop on first error.
-          this._logger.error(`failed to append span: ${err}`);
-          if (done) return done(ExportResult.FAILED_NOT_RETRYABLE);
-        }
-      });
+      try {
+        await this._append(span);
+      } catch (error) {
+        // TODO right now we break out on first error, is that desirable?
+        if (done) return done({ code: ExportResultCode.FAILED, error });
+      }
     }
-    // @todo: We should wait for all the callbacks of the append calls to
-    // complete before it calls done with success.
-    this._logger.debug('successful append for : %s', thriftSpan.length);
-    if (done) return done(ExportResult.SUCCESS);
+    diag.debug(`successful append for : ${thriftSpan.length}`);
+
+    // Flush all spans on each export. No-op if span buffer is empty
+    await this._flush();
+
+    if (done) return process.nextTick(done, { code: ExportResultCode.SUCCESS });
   }
 
-  private _flush(): void {
-    this._sender.flush((numSpans: number, err?: string) => {
-      if (err) {
-        this._logger.error(`failed to flush ${numSpans} spans: ${err}`);
+  private async _append(span: jaegerTypes.ThriftSpan): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this._getSender(span).append(span, (count: number, err?: string) => {
+        if (err) {
+          return reject(new Error(err));
+        }
+        resolve(count);
+      });
+    });
+  }
+
+  private _getSender(span: jaegerTypes.ThriftSpan): typeof jaegerTypes.UDPSender {
+    if (this._sender) {
+      return this._sender;
+    }
+
+    const sender = this._localConfig.endpoint ? new jaegerTypes.HTTPSender(this._localConfig) : new jaegerTypes.UDPSender(this._localConfig);
+
+    if (sender._client instanceof Socket) {
+      // unref socket to prevent it from keeping the process running
+      sender._client.unref();
+    }
+
+    const serviceNameTag = span.tags.find(t => t.key === SemanticResourceAttributes.SERVICE_NAME);
+    const serviceName = serviceNameTag?.vStr || 'unknown_service';
+
+    sender.setProcess({
+      serviceName,
+      tags: jaegerTypes.ThriftUtils.getThriftTags(this._localConfig.tags || []),
+    });
+
+    this._sender = sender;
+    return sender;
+  }
+
+  private async _flush(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      if (!this._sender) {
+        return resolve();
       }
+
+      this._sender.flush((_count: number, err?: string) => {
+        if (err) {
+          return reject(new Error(err));
+        }
+        diag.debug(`successful flush for ${_count} spans`);
+        resolve();
+      });
     });
   }
 }

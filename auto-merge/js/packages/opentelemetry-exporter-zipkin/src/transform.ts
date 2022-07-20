@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,22 +14,23 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
-import { ReadableSpan } from '@opentelemetry/tracing';
+import * as api from '@opentelemetry/api';
+import { ReadableSpan, TimedEvent } from '@opentelemetry/sdk-trace-base';
 import { hrTimeToMicroseconds } from '@opentelemetry/core';
 import * as zipkinTypes from './types';
+import { Resource } from '@opentelemetry/resources';
 
 const ZIPKIN_SPAN_KIND_MAPPING = {
-  [types.SpanKind.CLIENT]: zipkinTypes.SpanKind.CLIENT,
-  [types.SpanKind.SERVER]: zipkinTypes.SpanKind.SERVER,
-  [types.SpanKind.CONSUMER]: zipkinTypes.SpanKind.CONSUMER,
-  [types.SpanKind.PRODUCER]: zipkinTypes.SpanKind.PRODUCER,
+  [api.SpanKind.CLIENT]: zipkinTypes.SpanKind.CLIENT,
+  [api.SpanKind.SERVER]: zipkinTypes.SpanKind.SERVER,
+  [api.SpanKind.CONSUMER]: zipkinTypes.SpanKind.CONSUMER,
+  [api.SpanKind.PRODUCER]: zipkinTypes.SpanKind.PRODUCER,
   // When absent, the span is local.
-  [types.SpanKind.INTERNAL]: undefined,
+  [api.SpanKind.INTERNAL]: undefined,
 };
 
-export const statusCodeTagName = 'ot.status_code';
-export const statusDescriptionTagName = 'ot.status_description';
+export const defaultStatusCodeTagName = 'otel.status_code';
+export const defaultStatusErrorTagName = 'error';
 
 /**
  * Translate OpenTelemetry ReadableSpan to ZipkinSpan format
@@ -39,13 +40,13 @@ export function toZipkinSpan(
   span: ReadableSpan,
   serviceName: string,
   statusCodeTagName: string,
-  statusDescriptionTagName: string
+  statusErrorTagName: string
 ): zipkinTypes.Span {
   const zipkinSpan: zipkinTypes.Span = {
-    traceId: span.spanContext.traceId,
+    traceId: span.spanContext().traceId,
     parentId: span.parentSpanId,
     name: span.name,
-    id: span.spanContext.spanId,
+    id: span.spanContext().spanId,
     kind: ZIPKIN_SPAN_KIND_MAPPING[span.kind],
     timestamp: hrTimeToMicroseconds(span.startTime),
     duration: hrTimeToMicroseconds(span.duration),
@@ -54,7 +55,8 @@ export function toZipkinSpan(
       span.attributes,
       span.status,
       statusCodeTagName,
-      statusDescriptionTagName
+      statusErrorTagName,
+      span.resource
     ),
     annotations: span.events.length
       ? _toZipkinAnnotations(span.events)
@@ -64,21 +66,29 @@ export function toZipkinSpan(
   return zipkinSpan;
 }
 
-/** Converts OpenTelemetry Attributes and Status to Zipkin Tags format. */
+/** Converts OpenTelemetry SpanAttributes and SpanStatus to Zipkin Tags format. */
 export function _toZipkinTags(
-  attributes: types.Attributes,
-  status: types.Status,
+  attributes: api.SpanAttributes,
+  status: api.SpanStatus,
   statusCodeTagName: string,
-  statusDescriptionTagName: string
+  statusErrorTagName: string,
+  resource: Resource
 ): zipkinTypes.Tags {
   const tags: { [key: string]: string } = {};
   for (const key of Object.keys(attributes)) {
     tags[key] = String(attributes[key]);
   }
-  tags[statusCodeTagName] = String(types.CanonicalCode[status.code]);
-  if (status.message) {
-    tags[statusDescriptionTagName] = status.message;
+  if (status.code !== api.SpanStatusCode.UNSET) {
+    tags[statusCodeTagName] = String(api.SpanStatusCode[status.code]);
   }
+  if (status.code === api.SpanStatusCode.ERROR && status.message) {
+    tags[statusErrorTagName] = status.message;
+  }
+
+  Object.keys(resource.attributes).forEach(
+    name => (tags[name] = String(resource.attributes[name]))
+  );
+
   return tags;
 }
 
@@ -86,7 +96,7 @@ export function _toZipkinTags(
  * Converts OpenTelemetry Events to Zipkin Annotations format.
  */
 export function _toZipkinAnnotations(
-  events: types.TimedEvent[]
+  events: TimedEvent[]
 ): zipkinTypes.Annotation[] {
   return events.map(event => ({
     timestamp: hrTimeToMicroseconds(event.time),

@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,33 +14,37 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
-
 /**
  * Options for Jaeger configuration
  */
 export interface ExporterConfig {
-  logger?: types.Logger;
-  serviceName: string;
   tags?: Tag[];
   host?: string; // default: 'localhost'
   port?: number; // default: 6832
   maxPacketSize?: number; // default: 65000
-  forceFlush?: boolean; // default: true
+  /** Time to wait for an onShutdown flush to finish before closing the sender */
   flushTimeout?: number; // default: 2000
-  flushInterval?: number; // default(ms): 5000
+  //The HTTP endpoint for sending spans directly to a collector, i.e. http://jaeger-collector:14268/api/traces
+  //If setten will override host and port
+  endpoint?: string;
+  //Username to send as part of "Basic" authentication to the collector endpoint
+  username?: string;
+  //Password to send as part of "Basic" authentication to the collector endpoint
+  password?: string;
 }
 
 // Below require is needed as jaeger-client types does not expose the thrift,
 // udp_sender, util etc. modules.
 
-// tslint:disable-next-line:variable-name
+/* eslint-disable @typescript-eslint/no-var-requires */
 export const UDPSender = require('jaeger-client/dist/src/reporters/udp_sender')
   .default;
-// tslint:disable-next-line:variable-name
 export const Utils = require('jaeger-client/dist/src/util').default;
-// tslint:disable-next-line:variable-name
 export const ThriftUtils = require('jaeger-client/dist/src/thrift').default;
+
+export const HTTPSender = require('jaeger-client/dist/src/reporters/http_sender')
+  .default;
+/* eslint-enable @typescript-eslint/no-var-requires */
 
 export type TagValue = string | number | boolean;
 

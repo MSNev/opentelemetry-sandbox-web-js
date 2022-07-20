@@ -1,12 +1,11 @@
 {
   "name": "example-basic-tracer-node",
   "private": true,
-  "version": "0.2.0",
-  "description": "Example of using @opentelemetry/tracing in Node.js",
+  "version": "0.25.0",
+  "description": "Example of using @opentelemetry/sdk-trace-base in Node.js",
   "main": "index.js",
   "scripts": {
-    "zipkin:basic": "cross-env EXPORTER=zipkin node ./index.js",
-    "jaeger:basic": "cross-env EXPORTER=jaeger node ./index.js"
+    "start": "node ./index.js"
   },
   "repository": {
     "type": "git",
@@ -14,11 +13,10 @@
   },
   "keywords": [
     "opentelemetry",
-    "http",
     "tracing"
   ],
   "engines": {
-    "node": ">=8"
+    "node": ">=14"
   },
   "author": "OpenTelemetry Authors",
   "license": "Apache-2.0",
@@ -26,13 +24,11 @@
     "url": "https://github.com/open-telemetry/opentelemetry-js/issues"
   },
   "dependencies": {
-    "@opentelemetry/core": "^0.2.0",
-    "@opentelemetry/exporter-jaeger": "^0.2.0",
-    "@opentelemetry/exporter-zipkin": "^0.2.0",
-    "@opentelemetry/tracing": "^0.2.0"
+    "@opentelemetry/api": "^1.0.2",
+    "@opentelemetry/exporter-jaeger": "0.25.0",
+    "@opentelemetry/resources": "0.25.0",
+    "@opentelemetry/semantic-conventions": "0.25.0",
+    "@opentelemetry/sdk-trace-base": "0.25.0"
   },
-  "homepage": "https://github.com/open-telemetry/opentelemetry-js#readme",
-  "devDependencies": {
-    "cross-env": "^6.0.0"
-  }
+  "homepage": "https://github.com/open-telemetry/opentelemetry-js#readme"
 }

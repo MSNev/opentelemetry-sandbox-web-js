@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,19 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
+import { ExportResult } from '@opentelemetry/core';
 
 /**
  * Exporter config
  */
 export interface ExporterConfig {
-  logger?: types.Logger;
-  serviceName: string;
+  headers?: Record<string, string>;
+  serviceName?: string;
   url?: string;
-  // Initiates a request with spans in memory to the backend.
-  forceFlush?: boolean;
   // Optional mapping overrides for OpenTelemetry status code and description.
   statusCodeTagName?: string;
   statusDescriptionTagName?: string;
+  getExportRequestHeaders?: () => Record<string, string> | undefined;
 }
 
 /**
@@ -178,3 +177,15 @@ export enum SpanKind {
   CONSUMER = 'CONSUMER',
   PRODUCER = 'PRODUCER',
 }
+
+/**
+ * interface for function that will send zipkin spans
+ */
+export type SendFunction = (
+  zipkinSpans: Span[],
+  done: (result: ExportResult) => void
+) => void;
+
+export type GetHeaders = () => Record<string, string> | undefined;
+
+export type SendFn = (zipkinSpans: Span[], done: (result: ExportResult) => void) => void;

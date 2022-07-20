@@ -1,3 +1,7 @@
+# version.ts file is automatically generated at compile time
+
+version.ts
+
 # Logs
 logs
 *.log
@@ -61,8 +65,6 @@ typings/
 # lock files
 yarn.lock
 package-lock.json
-packages/**/yarn.lock
-packages/**/package-lock.json
 
 # docs files
 docs
@@ -71,3 +73,17 @@ docs
 
 #lerna
 .changelog
+package.json.lerna_backup
+
+# OS generated files
+.DS_Store
+
+# VsCode configs
+.vscode/
+
+#Visual Studio
+.vs/
+
+#IDEA
+.idea
+*.iml

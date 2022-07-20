@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
+import * as api from '@opentelemetry/api';
 import { validateKey, validateValue } from '../internal/validators';
 
 const MAX_TRACE_STATE_ITEMS = 32;
@@ -31,22 +31,28 @@ const LIST_MEMBER_KEY_VALUE_SPLITTER = '=';
  * - The value of any key can be updated. Modified keys MUST be moved to the
  * beginning of the list.
  */
-export class TraceState implements types.TraceState {
+export class TraceState implements api.TraceState {
   private _internalState: Map<string, string> = new Map();
 
   constructor(rawTraceState?: string) {
     if (rawTraceState) this._parse(rawTraceState);
   }
 
-  set(key: string, value: string): void {
+  set(key: string, value: string): TraceState {
     // TODO: Benchmark the different approaches(map vs list) and
     // use the faster one.
-    if (this._internalState.has(key)) this._internalState.delete(key);
-    this._internalState.set(key, value);
+    const traceState = this._clone();
+    if (traceState._internalState.has(key)) {
+      traceState._internalState.delete(key);
+    }
+    traceState._internalState.set(key, value);
+    return traceState;
   }
 
-  unset(key: string): void {
-    this._internalState.delete(key);
+  unset(key: string): TraceState {
+    const traceState = this._clone();
+    traceState._internalState.delete(key);
+    return traceState;
   }
 
   get(key: string): string | undefined {
@@ -68,10 +74,11 @@ export class TraceState implements types.TraceState {
       .split(LIST_MEMBERS_SEPARATOR)
       .reverse() // Store in reverse so new keys (.set(...)) will be placed at the beginning
       .reduce((agg: Map<string, string>, part: string) => {
-        const i = part.indexOf(LIST_MEMBER_KEY_VALUE_SPLITTER);
+        const listMember = part.trim(); // Optional Whitespace (OWS) handling
+        const i = listMember.indexOf(LIST_MEMBER_KEY_VALUE_SPLITTER);
         if (i !== -1) {
-          const key = part.slice(0, i);
-          const value = part.slice(i + 1, part.length);
+          const key = listMember.slice(0, i);
+          const value = listMember.slice(i + 1, part.length);
           if (validateKey(key) && validateValue(value)) {
             agg.set(key, value);
           } else {
@@ -93,5 +100,11 @@ export class TraceState implements types.TraceState {
 
   private _keys(): string[] {
     return Array.from(this._internalState.keys()).reverse();
+  }
+
+  private _clone(): TraceState {
+    const traceState = new TraceState();
+    traceState._internalState = new Map(this._internalState);
+    return traceState;
   }
 }

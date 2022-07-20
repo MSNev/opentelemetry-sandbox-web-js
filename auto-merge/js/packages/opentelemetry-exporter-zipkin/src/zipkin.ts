@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,52 +14,47 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
-import * as http from 'http';
-import * as https from 'https';
-import * as url from 'url';
-import { NoopLogger } from '@opentelemetry/core';
-import { SpanExporter, ReadableSpan } from '@opentelemetry/tracing';
-import { ExportResult } from '@opentelemetry/base';
+import { diag } from '@opentelemetry/api';
+import { ExportResult, ExportResultCode, getEnv } from '@opentelemetry/core';
+import { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { prepareSend } from './platform/index';
 import * as zipkinTypes from './types';
 import {
   toZipkinSpan,
-  statusCodeTagName,
-  statusDescriptionTagName,
+  defaultStatusCodeTagName,
+  defaultStatusErrorTagName,
 } from './transform';
-import { OT_REQUEST_HEADER } from './utils';
+import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
+import { prepareGetHeaders } from './utils';
+
 /**
  * Zipkin Exporter
  */
 export class ZipkinExporter implements SpanExporter {
-  static readonly DEFAULT_URL = 'http://localhost:9411/api/v2/spans';
-  private readonly _forceFlush: boolean;
-  private readonly _logger: types.Logger;
-  private readonly _serviceName: string;
+  private readonly DEFAULT_SERVICE_NAME = 'OpenTelemetry Service';
   private readonly _statusCodeTagName: string;
   private readonly _statusDescriptionTagName: string;
-  private readonly _reqOpts: http.RequestOptions;
+  private _urlStr: string;
+  private _send: zipkinTypes.SendFunction;
+  private _getHeaders: zipkinTypes.GetHeaders | undefined;
+  private _serviceName?: string;
+  private _isShutdown: boolean;
+  private _sendingPromises: Promise<unknown>[] = [];
 
-  constructor(config: zipkinTypes.ExporterConfig) {
-    const urlStr = config.url || ZipkinExporter.DEFAULT_URL;
-    const urlOpts = url.parse(urlStr);
-
-    this._forceFlush = config.forceFlush || true;
-    this._logger = config.logger || new NoopLogger();
-    this._reqOpts = Object.assign(
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          [OT_REQUEST_HEADER]: 1,
-        },
-      },
-      urlOpts
-    );
+  constructor(config: zipkinTypes.ExporterConfig = {}) {
+    this._urlStr = config.url || getEnv().OTEL_EXPORTER_ZIPKIN_ENDPOINT;
+    this._send = prepareSend(this._urlStr, config.headers);
     this._serviceName = config.serviceName;
-    this._statusCodeTagName = config.statusCodeTagName || statusCodeTagName;
+    this._statusCodeTagName = config.statusCodeTagName || defaultStatusCodeTagName;
     this._statusDescriptionTagName =
-      config.statusDescriptionTagName || statusDescriptionTagName;
+      config.statusDescriptionTagName || defaultStatusErrorTagName;
+    this._isShutdown = false;
+    if (typeof config.getExportRequestHeaders === 'function') {
+      this._getHeaders = prepareGetHeaders(config.getExportRequestHeaders);
+    } else {
+      // noop
+      this._beforeSend = function () {};
+    }
   }
 
   /**
@@ -68,33 +63,62 @@ export class ZipkinExporter implements SpanExporter {
   export(
     spans: ReadableSpan[],
     resultCallback: (result: ExportResult) => void
-  ) {
-    this._logger.debug('Zipkin exporter export');
-    return this._sendSpans(spans, resultCallback);
+  ): void {
+    const serviceName = String(
+      this._serviceName ||
+        spans[0].resource.attributes[SemanticResourceAttributes.SERVICE_NAME] ||
+        this.DEFAULT_SERVICE_NAME
+    );
+
+    diag.debug('Zipkin exporter export');
+    if (this._isShutdown) {
+      setTimeout(() =>
+        resultCallback({
+          code: ExportResultCode.FAILED,
+          error: new Error('Exporter has been shutdown'),
+        })
+      );
+      return;
+    }
+    const promise = new Promise<void>(resolve => {
+      this._sendSpans(spans, serviceName, result => {
+        resolve();
+        resultCallback(result);
+      });
+    });
+
+
+    this._sendingPromises.push(promise);
+    const popPromise = () => {
+      const index = this._sendingPromises.indexOf(promise);
+      this._sendingPromises.splice(index, 1);
+    };
+    promise.then(popPromise, popPromise);
   }
 
   /**
    * Shutdown exporter. Noop operation in this exporter.
    */
-  shutdown() {
-    this._logger.debug('Zipkin exporter shutdown');
-    // Make an optimistic flush.
-    if (this._forceFlush) {
-      // @todo get spans from span processor (batch)
-      this._sendSpans([]);
-    }
+  shutdown(): Promise<void> {
+    diag.debug('Zipkin exporter shutdown');
+    this._isShutdown = true;
+    return new Promise((resolve, reject) => {
+      Promise.all(this._sendingPromises).then(() => {
+        resolve();
+      }, reject);
+    });
   }
 
   /**
-   * Transforms an OpenTelemetry span to a Zipkin span.
+   * if user defines getExportRequestHeaders in config then this will be called
+   * everytime before send, otherwise it will be replaced with noop in
+   * constructor
+   * @default noop
    */
-  private _toZipkinSpan(span: ReadableSpan): zipkinTypes.Span {
-    return toZipkinSpan(
-      span,
-      this._serviceName,
-      this._statusCodeTagName,
-      this._statusDescriptionTagName
-    );
+  private _beforeSend() {
+    if (this._getHeaders) {
+      this._send = prepareSend(this._urlStr, this._getHeaders());
+    }
   }
 
   /**
@@ -102,64 +126,26 @@ export class ZipkinExporter implements SpanExporter {
    */
   private _sendSpans(
     spans: ReadableSpan[],
+    serviceName: string,
     done?: (result: ExportResult) => void
   ) {
-    const zipkinSpans = spans.map(span => this._toZipkinSpan(span));
+    const zipkinSpans = spans.map(span =>
+      toZipkinSpan(
+        span,
+        String(
+          span.attributes[SemanticResourceAttributes.SERVICE_NAME] ||
+            span.resource.attributes[SemanticResourceAttributes.SERVICE_NAME] ||
+            serviceName
+        ),
+        this._statusCodeTagName,
+        this._statusDescriptionTagName
+      )
+    );
+    this._beforeSend();
     return this._send(zipkinSpans, (result: ExportResult) => {
       if (done) {
         return done(result);
       }
     });
-  }
-
-  /**
-   * Send spans to the remote Zipkin service.
-   */
-  private _send(
-    zipkinSpans: zipkinTypes.Span[],
-    done: (result: ExportResult) => void
-  ) {
-    if (zipkinSpans.length === 0) {
-      this._logger.debug('Zipkin send with empty spans');
-      return done(ExportResult.SUCCESS);
-    }
-
-    const { request } = this._reqOpts.protocol === 'http:' ? http : https;
-    const req = request(this._reqOpts, (res: http.IncomingMessage) => {
-      let rawData = '';
-      res.on('data', chunk => {
-        rawData += chunk;
-      });
-      res.on('end', () => {
-        const statusCode = res.statusCode || 0;
-        this._logger.debug(
-          'Zipkin response status code: %d, body: %s',
-          statusCode,
-          rawData
-        );
-
-        // Consider 2xx and 3xx as success.
-        if (statusCode < 400) {
-          return done(ExportResult.SUCCESS);
-          // Consider 4xx as failed non-retriable.
-        } else if (statusCode < 500) {
-          return done(ExportResult.FAILED_NOT_RETRYABLE);
-          // Consider 5xx as failed retriable.
-        } else {
-          return done(ExportResult.FAILED_RETRYABLE);
-        }
-      });
-    });
-
-    req.on('error', (err: Error) => {
-      this._logger.error('Zipkin request error', err);
-      return done(ExportResult.FAILED_RETRYABLE);
-    });
-
-    // Issue request to remote service
-    const payload = JSON.stringify(zipkinSpans);
-    this._logger.debug('Zipkin request payload: %s', payload);
-    req.write(payload, 'utf8');
-    req.end();
   }
 }

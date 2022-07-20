@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,21 +14,30 @@
  * limitations under the License.
  */
 
-export * from './common/ConsoleLogger';
-export * from './common/NoopLogger';
+export * from './baggage/propagation/W3CBaggagePropagator';
+export * from './common/attributes';
+export * from './common/global-error-handler';
+export * from './common/logging-error-handler';
 export * from './common/time';
 export * from './common/types';
-export * from './context/propagation/B3Format';
-export * from './context/propagation/BinaryTraceContext';
-export * from './context/propagation/HttpTraceContext';
+export * from './ExportResult';
+export * from './version';
+export * as baggageUtils from './baggage/utils';
 export * from './platform';
-export * from './trace/globaltracer-utils';
-export * from './trace/instrumentation/BasePlugin';
-export * from './trace/NoopSpan';
-export * from './trace/NoopTracer';
-export * from './trace/NoRecordingSpan';
-export * from './trace/sampler/ProbabilitySampler';
-export * from './trace/spancontext-utils';
-export * from './trace/TracerDelegate';
+export * from './propagation/composite';
+export * from './trace/W3CTraceContextPropagator';
+export * from './trace/IdGenerator';
+export * from './trace/rpc-metadata';
+export * from './trace/sampler/AlwaysOffSampler';
+export * from './trace/sampler/AlwaysOnSampler';
+export * from './trace/sampler/ParentBasedSampler';
+export * from './trace/sampler/TraceIdRatioBasedSampler';
+export * from './trace/suppress-tracing';
 export * from './trace/TraceState';
-export * from './metrics/NoopMeter';
+export * from './utils/environment';
+export * from './utils/merge';
+export * from './utils/sampling';
+export * from './utils/url';
+export * from './utils/wrap';
+export * from './utils/callback';
+export * from './version';

@@ -14,21 +14,30 @@
  * limitations under the License.
  */
 
-import { Context } from '@opentelemetry/context-base';
-import { NOOP_TEXT_MAP_PROPAGATOR } from '../context/propagation/NoopTextMapPropagator';
+import { Context } from '../context/types';
+import {
+  getGlobal,
+  registerGlobal,
+  unregisterGlobal,
+} from '../internal/global-utils';
+import { NoopTextMapPropagator } from '../propagation/NoopTextMapPropagator';
 import {
   defaultTextMapGetter,
   defaultTextMapSetter,
   TextMapGetter,
   TextMapPropagator,
   TextMapSetter,
-} from '../context/propagation/TextMapPropagator';
+} from '../propagation/TextMapPropagator';
 import {
-  API_BACKWARDS_COMPATIBILITY_VERSION,
-  GLOBAL_PROPAGATION_API_KEY,
-  makeGetter,
-  _global,
-} from './global-utils';
+  getBaggage,
+  setBaggage,
+  deleteBaggage,
+} from '../baggage/context-helpers';
+import { createBaggage } from '../baggage/utils';
+import { DiagAPI } from './diag';
+
+const API_NAME = 'propagation';
+const NOOP_TEXT_MAP_PROPAGATOR = new NoopTextMapPropagator();
 
 /**
  * Singleton object which represents the entry point to the OpenTelemetry Propagation API
@@ -49,21 +58,12 @@ export class PropagationAPI {
   }
 
   /**
-   * Set the current propagator. Returns the initialized propagator
+   * Set the current propagator.
+   *
+   * @returns true if the propagator was successfully registered, else false
    */
-  public setGlobalPropagator(propagator: TextMapPropagator): TextMapPropagator {
-    if (_global[GLOBAL_PROPAGATION_API_KEY]) {
-      // global propagator has already been set
-      return this._getGlobalPropagator();
-    }
-
-    _global[GLOBAL_PROPAGATION_API_KEY] = makeGetter(
-      API_BACKWARDS_COMPATIBILITY_VERSION,
-      propagator,
-      NOOP_TEXT_MAP_PROPAGATOR
-    );
-
-    return propagator;
+  public setGlobalPropagator(propagator: TextMapPropagator): boolean {
+    return registerGlobal(API_NAME, propagator, DiagAPI.instance());
   }
 
   /**
@@ -105,14 +105,18 @@ export class PropagationAPI {
 
   /** Remove the global propagator */
   public disable() {
-    delete _global[GLOBAL_PROPAGATION_API_KEY];
+    unregisterGlobal(API_NAME, DiagAPI.instance());
   }
 
+  public createBaggage = createBaggage;
+
+  public getBaggage = getBaggage;
+
+  public setBaggage = setBaggage;
+
+  public deleteBaggage = deleteBaggage;
+
   private _getGlobalPropagator(): TextMapPropagator {
-    return (
-      _global[GLOBAL_PROPAGATION_API_KEY]?.(
-        API_BACKWARDS_COMPATIBILITY_VERSION
-      ) ?? NOOP_TEXT_MAP_PROPAGATOR
-    );
+    return getGlobal(API_NAME) || NOOP_TEXT_MAP_PROPAGATOR;
   }
 }

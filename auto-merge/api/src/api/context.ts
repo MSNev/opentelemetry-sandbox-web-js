@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
+import { NoopContextManager } from '../context/NoopContextManager';
+import { Context, ContextManager } from '../context/types';
 import {
-  Context,
-  ContextManager,
-  NoopContextManager,
-} from '@opentelemetry/context-base';
-import {
-  API_BACKWARDS_COMPATIBILITY_VERSION,
-  GLOBAL_CONTEXT_MANAGER_API_KEY,
-  makeGetter,
-  _global,
-} from './global-utils';
+  getGlobal,
+  registerGlobal,
+  unregisterGlobal,
+} from '../internal/global-utils';
+import { DiagAPI } from './diag';
 
+const API_NAME = 'context';
 const NOOP_CONTEXT_MANAGER = new NoopContextManager();
 
 /**
@@ -47,23 +45,12 @@ export class ContextAPI {
   }
 
   /**
-   * Set the current context manager. Returns the initialized context manager
+   * Set the current context manager.
+   *
+   * @returns true if the context manager was successfully registered, else false
    */
-  public setGlobalContextManager(
-    contextManager: ContextManager
-  ): ContextManager {
-    if (_global[GLOBAL_CONTEXT_MANAGER_API_KEY]) {
-      // global context manager has already been set
-      return this._getContextManager();
-    }
-
-    _global[GLOBAL_CONTEXT_MANAGER_API_KEY] = makeGetter(
-      API_BACKWARDS_COMPATIBILITY_VERSION,
-      contextManager,
-      NOOP_CONTEXT_MANAGER
-    );
-
-    return contextManager;
+  public setGlobalContextManager(contextManager: ContextManager): boolean {
+    return registerGlobal(API_NAME, contextManager, DiagAPI.instance());
   }
 
   /**
@@ -93,24 +80,20 @@ export class ContextAPI {
   /**
    * Bind a context to a target function or event emitter
    *
-   * @param target function or event emitter to bind
    * @param context context to bind to the event emitter or function. Defaults to the currently active context
+   * @param target function or event emitter to bind
    */
-  public bind<T>(target: T, context: Context = this.active()): T {
-    return this._getContextManager().bind(target, context);
+  public bind<T>(context: Context, target: T): T {
+    return this._getContextManager().bind(context, target);
   }
 
   private _getContextManager(): ContextManager {
-    return (
-      _global[GLOBAL_CONTEXT_MANAGER_API_KEY]?.(
-        API_BACKWARDS_COMPATIBILITY_VERSION
-      ) ?? NOOP_CONTEXT_MANAGER
-    );
+    return getGlobal(API_NAME) || NOOP_CONTEXT_MANAGER;
   }
 
   /** Disable and remove the global context manager */
   public disable() {
     this._getContextManager().disable();
-    delete _global[GLOBAL_CONTEXT_MANAGER_API_KEY];
+    unregisterGlobal(API_NAME, DiagAPI.instance());
   }
 }

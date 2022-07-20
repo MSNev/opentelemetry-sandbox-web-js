@@ -14,17 +14,28 @@
  * limitations under the License.
  */
 
-import { NOOP_TRACER_PROVIDER } from '../trace/NoopTracerProvider';
+import {
+  getGlobal,
+  registerGlobal,
+  unregisterGlobal,
+} from '../internal/global-utils';
 import { ProxyTracerProvider } from '../trace/ProxyTracerProvider';
+import {
+  isSpanContextValid,
+  wrapSpanContext,
+} from '../trace/spancontext-utils';
 import { Tracer } from '../trace/tracer';
 import { TracerProvider } from '../trace/tracer_provider';
-import { isSpanContextValid } from '../trace/spancontext-utils';
 import {
-  API_BACKWARDS_COMPATIBILITY_VERSION,
-  GLOBAL_TRACE_API_KEY,
-  makeGetter,
-  _global,
-} from './global-utils';
+  deleteSpan,
+  getSpan,
+  getSpanContext,
+  setSpan,
+  setSpanContext,
+} from '../trace/context-utils';
+import { DiagAPI } from './diag';
+
+const API_NAME = 'trace';
 
 /**
  * Singleton object which represents the entry point to the OpenTelemetry Tracing API
@@ -47,33 +58,27 @@ export class TraceAPI {
   }
 
   /**
-   * Set the current global tracer. Returns the initialized global tracer provider
+   * Set the current global tracer.
+   *
+   * @returns true if the tracer provider was successfully registered, else false
    */
-  public setGlobalTracerProvider(provider: TracerProvider): TracerProvider {
-    if (_global[GLOBAL_TRACE_API_KEY]) {
-      // global tracer provider has already been set
-      return this.getTracerProvider();
-    }
-
-    this._proxyTracerProvider.setDelegate(provider);
-
-    _global[GLOBAL_TRACE_API_KEY] = makeGetter(
-      API_BACKWARDS_COMPATIBILITY_VERSION,
+  public setGlobalTracerProvider(provider: TracerProvider): boolean {
+    const success = registerGlobal(
+      API_NAME,
       this._proxyTracerProvider,
-      NOOP_TRACER_PROVIDER
+      DiagAPI.instance()
     );
-
-    return this.getTracerProvider();
+    if (success) {
+      this._proxyTracerProvider.setDelegate(provider);
+    }
+    return success;
   }
 
   /**
    * Returns the global tracer provider.
    */
   public getTracerProvider(): TracerProvider {
-    return (
-      _global[GLOBAL_TRACE_API_KEY]?.(API_BACKWARDS_COMPATIBILITY_VERSION) ??
-      this._proxyTracerProvider
-    );
+    return getGlobal(API_NAME) || this._proxyTracerProvider;
   }
 
   /**
@@ -85,9 +90,21 @@ export class TraceAPI {
 
   /** Remove the global tracer provider */
   public disable() {
-    delete _global[GLOBAL_TRACE_API_KEY];
+    unregisterGlobal(API_NAME, DiagAPI.instance());
     this._proxyTracerProvider = new ProxyTracerProvider();
   }
 
+  public wrapSpanContext = wrapSpanContext;
+
   public isSpanContextValid = isSpanContextValid;
+
+  public deleteSpan = deleteSpan;
+
+  public getSpan = getSpan;
+
+  public getSpanContext = getSpanContext;
+
+  public setSpan = setSpan;
+
+  public setSpanContext = setSpanContext;
 }

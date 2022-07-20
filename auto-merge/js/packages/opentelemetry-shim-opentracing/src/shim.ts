@@ -1,5 +1,5 @@
-/**
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,19 @@
  * limitations under the License.
  */
 
-import * as types from '@opentelemetry/types';
-import { NoopLogger } from '@opentelemetry/core';
+import * as api from '@opentelemetry/api';
+import { SpanAttributes, SpanAttributeValue, SpanStatusCode, TextMapPropagator } from '@opentelemetry/api';
 import * as opentracing from 'opentracing';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 
-function translateReferences(
-  references: opentracing.Reference[]
-): types.Link[] {
-  const links: types.Link[] = [];
+function translateReferences(references: opentracing.Reference[]): api.Link[] {
+  const links: api.Link[] = [];
   for (const reference of references) {
     const context = reference.referencedContext();
     if (context instanceof SpanContextShim) {
       links.push({
-        spanContext: (context as SpanContextShim).getSpanContext(),
-        attributes: { 'span.kind': reference.type },
+        context: (context as SpanContextShim).getSpanContext(),
+        attributes: { 'span.kind': reference.type() },
       });
     }
   }
@@ -36,8 +35,8 @@ function translateReferences(
 
 function translateSpanOptions(
   options: opentracing.SpanOptions
-): types.SpanOptions {
-  const opts: types.SpanOptions = {
+): api.SpanOptions {
+  const opts: api.SpanOptions = {
     startTime: options.startTime,
   };
 
@@ -45,142 +44,194 @@ function translateSpanOptions(
     opts.links = translateReferences(options.references);
   }
 
-  if (options.childOf) {
-    if (options.childOf instanceof SpanShim) {
-      opts.parent = (options.childOf as SpanShim).getSpan();
-    } else if (options.childOf instanceof SpanContextShim) {
-      opts.parent = (options.childOf as SpanContextShim).getSpanContext();
-    }
-  }
   return opts;
 }
 
+function getContextWithParent(options: opentracing.SpanOptions) {
+  if (options.childOf) {
+    if (options.childOf instanceof SpanShim) {
+      return api.trace.setSpan(api.context.active(), options.childOf.getSpan());
+    } else if (options.childOf instanceof SpanContextShim) {
+      return api.trace.setSpanContext(
+        api.context.active(),
+        options.childOf.getSpanContext()
+      );
+    }
+  }
+  return api.context.active();
+}
+
 /**
- * SpanContextShim wraps a {@link types.SpanContext} and implements the
+ * SpanContextShim wraps a {@link api.SpanContext} and implements the
  * OpenTracing span context API.
  */
 export class SpanContextShim extends opentracing.SpanContext {
-  private readonly _spanContext: types.SpanContext;
+  private readonly _spanContext: api.SpanContext;
+  private _baggage: api.Baggage;
 
-  constructor(spanContext: types.SpanContext) {
+  constructor(spanContext: api.SpanContext, baggage: api.Baggage) {
     super();
     this._spanContext = spanContext;
+    this._baggage = baggage;
   }
 
   /**
-   * Returns the underlying {@link types.SpanContext}
+   * Returns the underlying {@link api.SpanContext}
    */
-  getSpanContext(): types.SpanContext {
+  getSpanContext(): api.SpanContext {
     return this._spanContext;
+  }
+
+  /**
+   * Returns the underlying {@link api.Baggage}
+   */
+  getBaggage(): api.Baggage {
+    return this._baggage;
   }
 
   /**
    * Returns the trace ID as a string.
    */
-  toTraceId(): string {
+  override toTraceId(): string {
     return this._spanContext.traceId;
   }
 
   /**
    * Returns the span ID as a string.
    */
-  toSpanId(): string {
+  override toSpanId(): string {
     return this._spanContext.spanId;
+  }
+
+  getBaggageItem(key: string): string | undefined {
+    return this._baggage.getEntry(key)?.value;
+  }
+
+  setBaggageItem(key: string, value: string): void {
+    this._baggage = this._baggage.setEntry(key, { value });
   }
 }
 
 /**
- * TracerShim wraps a {@link types.Tracer} and implements the
+ * TracerShim wraps a {@link api.Tracer} and implements the
  * OpenTracing tracer API.
  */
 export class TracerShim extends opentracing.Tracer {
-  private readonly _tracer: types.Tracer;
-  private readonly _logger: types.Logger;
+  private readonly _tracer: api.Tracer;
+  private readonly _propagators: ShimPropagators | undefined;
 
-  constructor(tracer: types.Tracer, logger?: types.Logger) {
+  constructor(tracer: api.Tracer, propagators?: ShimPropagators) {
     super();
 
     this._tracer = tracer;
-    this._logger = logger || new NoopLogger();
+    this._propagators = propagators;
   }
 
-  startSpan(
+  override startSpan(
     name: string,
     options: opentracing.SpanOptions = {}
   ): opentracing.Span {
-    const span = this._tracer.startSpan(name, translateSpanOptions(options));
+    const span = this._tracer.startSpan(
+      name,
+      translateSpanOptions(options),
+      getContextWithParent(options)
+    );
+
+    let baggage: api.Baggage = api.propagation.createBaggage();
+    if (options.childOf instanceof SpanShim) {
+      const shimContext = options.childOf.context() as SpanContextShim;
+      baggage = shimContext.getBaggage();
+    } else if (options.childOf instanceof SpanContextShim) {
+      baggage = options.childOf.getBaggage();
+    }
 
     if (options.tags) {
       span.setAttributes(options.tags);
     }
 
-    return new SpanShim(this, span);
+    return new SpanShim(this, span, baggage);
   }
 
-  _inject(
+  override _inject(
     spanContext: opentracing.SpanContext,
     format: string,
     carrier: unknown
   ): void {
-    const opentelemSpanContext: types.SpanContext = (spanContext as SpanContextShim).getSpanContext();
-    switch (format) {
-      // tslint:disable-next-line:no-switch-case-fall-through
-      case opentracing.FORMAT_HTTP_HEADERS:
-      case opentracing.FORMAT_TEXT_MAP:
-        this._tracer
-          .getHttpTextFormat()
-          .inject(opentelemSpanContext, format, carrier);
-        return;
-      case opentracing.FORMAT_BINARY:
-        this._logger.warn(
-          'OpentracingShim.inject() does not support FORMAT_BINARY'
-        );
-        // @todo: Implement binary format
-        return;
-      default:
+    const spanContextShim: SpanContextShim = spanContext as SpanContextShim;
+    const oTelSpanContext: api.SpanContext = spanContextShim.getSpanContext();
+    const oTelSpanBaggage: api.Baggage = spanContextShim.getBaggage();
+
+    if (!carrier || typeof carrier !== 'object') return;
+
+    if (format === opentracing.FORMAT_BINARY) {
+      api.diag.warn('OpentracingShim.inject() does not support FORMAT_BINARY');
+      // @todo: Implement binary format
+      return;
+    }
+
+    const propagator = this._getPropagator(format);
+    if (propagator !== undefined) {
+      const context = api.propagation.setBaggage(
+        api.trace.setSpanContext(api.ROOT_CONTEXT, oTelSpanContext),
+        oTelSpanBaggage
+      );
+      propagator.inject(context, carrier, api.defaultTextMapSetter);
     }
   }
 
-  _extract(format: string, carrier: unknown): opentracing.SpanContext | null {
-    switch (format) {
-      // tslint:disable-next-line:no-switch-case-fall-through
-      case opentracing.FORMAT_HTTP_HEADERS:
-      case opentracing.FORMAT_TEXT_MAP:
-        const context = this._tracer
-          .getHttpTextFormat()
-          .extract(format, carrier);
-        if (!context) {
-          return null;
-        }
-        return new SpanContextShim(context);
-      case opentracing.FORMAT_BINARY:
-        // @todo: Implement binary format
-        this._logger.warn(
-          'OpentracingShim.extract() does not support FORMAT_BINARY'
-        );
+  override _extract(format: string, carrier: unknown): opentracing.SpanContext | null {
+    if (format === opentracing.FORMAT_BINARY) {
+      api.diag.warn('OpentracingShim.extract() does not support FORMAT_BINARY');
+      // @todo: Implement binary format
+      return null;
+    }
+
+    const propagator = this._getPropagator(format);
+    if (propagator !== undefined) {
+      const context: api.Context = propagator.extract(
+        api.ROOT_CONTEXT,
+        carrier,
+        api.defaultTextMapGetter
+      );
+      const spanContext = api.trace.getSpanContext(context);
+      const baggage = api.propagation.getBaggage(context);
+
+      if (!spanContext) {
         return null;
-      default:
+      }
+      return new SpanContextShim(spanContext, baggage || api.propagation.createBaggage());
     }
     return null;
+  }
+
+  private _getPropagator(format: string): api.TextMapPropagator | undefined {
+    switch (format) {
+      case opentracing.FORMAT_TEXT_MAP:
+        return this._propagators?.textMapPropagator ?? api.propagation;
+      case opentracing.FORMAT_HTTP_HEADERS:
+        return this._propagators?.httpHeadersPropagator ?? api.propagation;
+      default:
+        return;
+    }
   }
 }
 
 /**
- * SpanShim wraps an {@link types.Span} and implements the OpenTracing Span API
+ * SpanShim wraps an {@link api.Span} and implements the OpenTracing Span API
  * around it.
- * @todo: Out of band baggage propagation is not currently supported.
- */
+ *
+ **/
 export class SpanShim extends opentracing.Span {
   // _span is the original OpenTelemetry span that we are wrapping with
   // an opentracing interface.
-  private readonly _span: types.Span;
+  private readonly _span: api.Span;
   private readonly _contextShim: SpanContextShim;
   private readonly _tracerShim: TracerShim;
 
-  constructor(tracerShim: TracerShim, span: types.Span) {
+  constructor(tracerShim: TracerShim, span: api.Span, baggage: api.Baggage) {
     super();
     this._span = span;
-    this._contextShim = new SpanContextShim(span.context());
+    this._contextShim = new SpanContextShim(span.spanContext(), baggage);
     this._tracerShim = tracerShim;
   }
 
@@ -189,14 +240,14 @@ export class SpanShim extends opentracing.Span {
    *
    * @returns a {@link SpanContextShim} containing the underlying context.
    */
-  context(): opentracing.SpanContext {
+  override context(): opentracing.SpanContext {
     return this._contextShim;
   }
 
   /**
    * Returns the {@link opentracing.Tracer} that created the span.
    */
-  tracer(): opentracing.Tracer {
+  override tracer(): opentracing.Tracer {
     return this._tracerShim;
   }
 
@@ -205,7 +256,7 @@ export class SpanShim extends opentracing.Span {
    *
    * @param name the Span name.
    */
-  setOperationName(name: string): this {
+  override setOperationName(name: string): this {
     this._span.updateName(name);
     return this;
   }
@@ -216,7 +267,7 @@ export class SpanShim extends opentracing.Span {
    *
    * @param finishTime An optional timestamp to explicitly set the span's end time.
    */
-  finish(finishTime?: number): void {
+  override finish(finishTime?: number): void {
     this._span.end(finishTime);
   }
 
@@ -225,30 +276,76 @@ export class SpanShim extends opentracing.Span {
    * @param eventName name of the event.
    * @param payload an arbitrary object to be attached to the event.
    */
-  logEvent(eventName: string, payload?: unknown): void {
-    let attrs: types.Attributes = {};
-    if (payload) {
-      attrs = { payload };
-    }
-    this._span.addEvent(eventName, attrs);
+  override logEvent(eventName: string, payload?: SpanAttributes): void {
+    this._logInternal(eventName, payload);
   }
 
   /**
    * Logs a set of key value pairs. Since OpenTelemetry only supports events,
-   * the KV pairs are used as attributes on an event named "log".
+   * the KV pairs are used as attributes on a Span event.
+   * @param keyValuePairs a set of key-value pairs to be used as event attributes
+   * @param timestamp optional timestamp for the event
    */
-  log(keyValuePairs: { [key: string]: unknown }, timestamp?: number): this {
-    // @todo: Handle timestamp
-    this._span.addEvent('log', keyValuePairs);
+  override log(keyValuePairs: SpanAttributes, timestamp?: number): this {
+    const entries = Object.entries(keyValuePairs);
+    const eventEntry = entries.find(([key, _]) => key === 'event');
+    const eventName = eventEntry?.[1] || 'log';
+    const name = eventName.toString();
+
+    this._logInternal(name, keyValuePairs, timestamp);
     return this;
+  }
+
+  private _logInternal(eventName: string, attributes: SpanAttributes | undefined, timestamp?: number): void {
+    if (attributes && eventName === 'error') {
+      const entries = Object.entries(attributes);
+      const errorEntry = entries.find(([key]) => key === 'error.object');
+      const error = errorEntry?.[1];
+      if (typeof error === 'string') {
+        this._span.recordException(error, timestamp);
+        return;
+      }
+
+      const mappedAttributes: api.SpanAttributes = {};
+      for (const [k, v] of entries) {
+        switch (k) {
+          case 'error.kind': {
+            mappedAttributes[SemanticAttributes.EXCEPTION_TYPE] = v;
+            break;
+          }
+          case 'message': {
+            mappedAttributes[SemanticAttributes.EXCEPTION_MESSAGE] = v;
+            break;
+          }
+          case 'stack': {
+            mappedAttributes[SemanticAttributes.EXCEPTION_STACKTRACE] = v;
+            break;
+          }
+          default: {
+            mappedAttributes[k] = v;
+            break;
+          }
+        }
+      }
+      this._span.addEvent('exception', mappedAttributes, timestamp);
+      return;
+    }
+    this._span.addEvent(eventName, attributes, timestamp);
   }
 
   /**
    * Adds a set of tags to the span.
    * @param keyValueMap set of KV pairs representing tags
    */
-  addTags(keyValueMap: { [key: string]: unknown }): this {
-    this._span.setAttributes(keyValueMap);
+  override addTags(keyValueMap: SpanAttributes): this {
+    for (const [key, value] of Object.entries(keyValueMap)) {
+      if (this._setErrorAsSpanStatusCode(key, value)) {
+        continue;
+      }
+      if (value !== undefined) {
+        this._span.setAttribute(key, value);
+      }
+    }
     return this;
   }
 
@@ -258,12 +355,8 @@ export class SpanShim extends opentracing.Span {
    * @param key key for the tag
    * @param value value for the tag
    */
-  setTag(key: string, value: unknown): this {
-    if (
-      key === opentracing.Tags.ERROR &&
-      (value === true || value === 'true')
-    ) {
-      this._span.setStatus({ code: types.CanonicalCode.UNKNOWN });
+  override setTag(key: string, value: SpanAttributeValue): this {
+    if (this._setErrorAsSpanStatusCode(key, value)) {
       return this;
     }
 
@@ -271,21 +364,55 @@ export class SpanShim extends opentracing.Span {
     return this;
   }
 
-  getBaggageItem(key: string): string | undefined {
-    // TODO: should this go into the context?
-    return undefined;
+  override getBaggageItem(key: string): string | undefined {
+    return this._contextShim.getBaggageItem(key);
   }
 
-  setBaggageItem(key: string, value: string): this {
-    // TODO: should this go into the context?
+  override setBaggageItem(key: string, value: string): this {
+    this._contextShim.setBaggageItem(key, value);
     return this;
   }
 
-  /*
-   * Returns the underlying {@link types.Span} that the shim
+  /**
+   * Returns the underlying {@link api.Span} that the shim
    * is wrapping.
    */
-  getSpan(): types.Span {
+  getSpan(): api.Span {
     return this._span;
   }
+
+  private _setErrorAsSpanStatusCode(
+    key: string,
+    value: SpanAttributeValue | undefined
+  ): boolean {
+    if (key === opentracing.Tags.ERROR) {
+      const statusCode = SpanShim._mapErrorTag(value);
+      this._span.setStatus({ code: statusCode });
+      return statusCode !== SpanStatusCode.UNSET;
+    }
+    return false;
+  }
+
+  private static _mapErrorTag(
+    value: SpanAttributeValue | undefined
+  ): SpanStatusCode {
+    switch (value) {
+      case true:
+      case 'true':
+        return SpanStatusCode.ERROR;
+      case false:
+      case 'false':
+        return SpanStatusCode.OK;
+      default:
+        return SpanStatusCode.UNSET;
+    }
+  }
+}
+
+/**
+ * Propagator configuration for the {@link TracerShim}
+ */
+export interface ShimPropagators {
+  textMapPropagator?: TextMapPropagator;
+  httpHeadersPropagator?: TextMapPropagator;
 }

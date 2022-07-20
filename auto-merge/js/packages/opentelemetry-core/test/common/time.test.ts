@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 import * as assert from 'assert';
 import { otperformance as performance } from '../../src/platform';
 import * as sinon from 'sinon';
-import * as types from '@opentelemetry/types';
+import * as api from '@opentelemetry/api';
 import {
   hrTime,
   timeInputToHrTime,
@@ -25,31 +25,26 @@ import {
   hrTimeToNanoseconds,
   hrTimeToMilliseconds,
   hrTimeToMicroseconds,
+  hrTimeToTimeStamp,
   isTimeInput,
 } from '../../src/common/time';
 
 describe('time', () => {
-  let sandbox: sinon.SinonSandbox;
-
-  beforeEach(() => {
-    sandbox = sinon.createSandbox();
-  });
-
   afterEach(() => {
-    sandbox.restore();
+    sinon.restore();
   });
 
   describe('#hrTime', () => {
     it('should return hrtime now', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
-      sandbox.stub(performance, 'now').callsFake(() => 11.3);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'now').callsFake(() => 11.3);
 
       const output = hrTime();
       assert.deepStrictEqual(output, [0, 22800000]);
     });
 
     it('should convert performance now', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
       const performanceNow = 11.3;
 
       const output = hrTime(performanceNow);
@@ -57,7 +52,7 @@ describe('time', () => {
     });
 
     it('should handle nanosecond overflow', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
       const performanceNow = 11.6;
 
       const output = hrTime(performanceNow);
@@ -65,24 +60,24 @@ describe('time', () => {
     });
 
     it('should allow passed "performanceNow" equal to 0', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
-      sandbox.stub(performance, 'now').callsFake(() => 11.3);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'now').callsFake(() => 11.3);
 
       const output = hrTime(0);
       assert.deepStrictEqual(output, [0, 11500000]);
     });
 
     it('should use performance.now() when "performanceNow" is equal to undefined', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
-      sandbox.stub(performance, 'now').callsFake(() => 11.3);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'now').callsFake(() => 11.3);
 
       const output = hrTime(undefined);
       assert.deepStrictEqual(output, [0, 22800000]);
     });
 
     it('should use performance.now() when "performanceNow" is equal to null', () => {
-      sandbox.stub(performance, 'timeOrigin').value(11.5);
-      sandbox.stub(performance, 'now').callsFake(() => 11.3);
+      sinon.stub(performance, 'timeOrigin').value(11.5);
+      sinon.stub(performance, 'now').callsFake(() => 11.3);
 
       const output = hrTime(null as any);
       assert.deepStrictEqual(output, [0, 22800000]);
@@ -97,8 +92,8 @@ describe('time', () => {
           },
         });
 
-        sandbox.stub(performance, 'timeOrigin').value(undefined);
-        sandbox.stub(performance, 'now').callsFake(() => 11.3);
+        sinon.stub(performance, 'timeOrigin').value(undefined);
+        sinon.stub(performance, 'now').callsFake(() => 11.3);
 
         const output = hrTime();
         assert.deepStrictEqual(output, [0, 22800000]);
@@ -108,9 +103,9 @@ describe('time', () => {
 
   describe('#timeInputToHrTime', () => {
     it('should convert Date hrTime', () => {
-      const timeInput = new Date();
+      const timeInput = new Date(1609297640313);
       const output = timeInputToHrTime(timeInput);
-      assert.deepStrictEqual(output, [timeInput.getTime(), 0]);
+      assert.deepStrictEqual(output, [1609297640, 312999964]);
     });
 
     it('should convert epoch milliseconds hrTime', () => {
@@ -120,7 +115,7 @@ describe('time', () => {
     });
 
     it('should convert performance.now() hrTime', () => {
-      sandbox.stub(performance, 'timeOrigin').value(111.5);
+      sinon.stub(performance, 'timeOrigin').value(111.5);
 
       const timeInput = 11.9;
       const output = timeInputToHrTime(timeInput);
@@ -129,7 +124,7 @@ describe('time', () => {
     });
 
     it('should not convert hrtime hrTime', () => {
-      sandbox.stub(performance, 'timeOrigin').value(111.5);
+      sinon.stub(performance, 'timeOrigin').value(111.5);
 
       const timeInput: [number, number] = [3138971, 245466222];
       const output = timeInputToHrTime(timeInput);
@@ -140,19 +135,28 @@ describe('time', () => {
 
   describe('#hrTimeDuration', () => {
     it('should return duration', () => {
-      const startTime: types.HrTime = [22, 400000000];
-      const endTime: types.HrTime = [32, 800000000];
+      const startTime: api.HrTime = [22, 400000000];
+      const endTime: api.HrTime = [32, 800000000];
 
       const output = hrTimeDuration(startTime, endTime);
       assert.deepStrictEqual(output, [10, 400000000]);
     });
 
     it('should handle nanosecond overflow', () => {
-      const startTime: types.HrTime = [22, 400000000];
-      const endTime: types.HrTime = [32, 200000000];
+      const startTime: api.HrTime = [22, 400000000];
+      const endTime: api.HrTime = [32, 200000000];
 
       const output = hrTimeDuration(startTime, endTime);
       assert.deepStrictEqual(output, [9, 800000000]);
+    });
+  });
+
+  describe('#hrTimeToTimeStamp', () => {
+    it('should return timestamp', () => {
+      const time: api.HrTime = [1573513121, 123456];
+
+      const output = hrTimeToTimeStamp(time);
+      assert.deepStrictEqual(output, '2019-11-11T22:58:41.000123456Z');
     });
   });
 

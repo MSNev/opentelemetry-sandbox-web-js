@@ -14,10 +14,14 @@
  * limitations under the License.
  */
 
-import { Context } from '@opentelemetry/context-base';
-import { Span, SpanOptions, Tracer } from '..';
-import { NOOP_TRACER } from './NoopTracer';
-import { ProxyTracerProvider } from './ProxyTracerProvider';
+import { Context } from '../context/types';
+import { NoopTracer } from './NoopTracer';
+import { Span } from './span';
+import { SpanOptions } from './SpanOptions';
+import { Tracer } from './tracer';
+import { TracerOptions } from './tracer_options';
+
+const NOOP_TRACER = new NoopTracer();
 
 /**
  * Proxy tracer provided by the proxy tracer provider
@@ -27,13 +31,24 @@ export class ProxyTracer implements Tracer {
   private _delegate?: Tracer;
 
   constructor(
-    private _provider: ProxyTracerProvider,
+    private _provider: TracerDelegator,
     public readonly name: string,
-    public readonly version?: string
+    public readonly version?: string,
+    public readonly options?: TracerOptions
   ) {}
 
   startSpan(name: string, options?: SpanOptions, context?: Context): Span {
     return this._getTracer().startSpan(name, options, context);
+  }
+
+  startActiveSpan<F extends (span: Span) => unknown>(
+    _name: string,
+    _options: F | SpanOptions,
+    _context?: F | Context,
+    _fn?: F
+  ): ReturnType<F> {
+    const tracer = this._getTracer();
+    return Reflect.apply(tracer.startActiveSpan, tracer, arguments);
   }
 
   /**
@@ -45,7 +60,7 @@ export class ProxyTracer implements Tracer {
       return this._delegate;
     }
 
-    const tracer = this._provider.getDelegateTracer(this.name, this.version);
+    const tracer = this._provider.getDelegateTracer(this.name, this.version, this.options);
 
     if (!tracer) {
       return NOOP_TRACER;
@@ -54,4 +69,8 @@ export class ProxyTracer implements Tracer {
     this._delegate = tracer;
     return this._delegate;
   }
+}
+
+export interface TracerDelegator {
+  getDelegateTracer(name: string, version?: string, options?: TracerOptions): Tracer | undefined;
 }

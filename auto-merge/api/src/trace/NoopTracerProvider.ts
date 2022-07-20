@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { NOOP_TRACER } from './NoopTracer';
+import { NoopTracer } from './NoopTracer';
 import { Tracer } from './tracer';
+import { TracerOptions } from './tracer_options';
 import { TracerProvider } from './tracer_provider';
 
 /**
@@ -25,9 +26,11 @@ import { TracerProvider } from './tracer_provider';
  * All operations are no-op.
  */
 export class NoopTracerProvider implements TracerProvider {
-  getTracer(_name?: string, _version?: string): Tracer {
-    return NOOP_TRACER;
+  getTracer(
+    _name?: string,
+    _version?: string,
+    _options?: TracerOptions
+  ): Tracer {
+    return new NoopTracer();
   }
 }
-
-export const NOOP_TRACER_PROVIDER = new NoopTracerProvider();

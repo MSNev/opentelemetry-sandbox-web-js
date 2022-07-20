@@ -1,51 +1,26 @@
 # Overview
 
-This example shows how to use [@opentelemetry/tracing](https://github.com/open-telemetry/opentelemetry-js/tree/master/packages/opentelemetry-tracing) to instrument a simple Node.js application - e.g. a batch job.
-It supports exporting spans either to [Zipkin](https://zipkin.io) or to [Jaeger](https://www.jaegertracing.io).
+This example shows how to use [@opentelemetry/sdk-trace-base](https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/opentelemetry-sdk-trace-base) to instrument a simple Node.js application - e.g. a batch job.
+
+Our example will export spans data simultaneously on `Console` and [Jaeger](https://www.jaegertracing.io), however you can run your code anywhere and can use any exporter that OpenTelemetry supports.
 
 ## Installation
 
 ```sh
-$ # from this directory
-$ npm install
+# from this directory
+npm install
 ```
 
-Setup [Zipkin Tracing](https://zipkin.io/pages/quickstart.html)
-or
-Setup [Jaeger Tracing](https://www.jaegertracing.io/docs/latest/getting-started/#all-in-one)
+(Optional) Setup [Jaeger Tracing](https://www.jaegertracing.io/docs/latest/getting-started/#all-in-one): needs to be running on `localhost` port `16686`.
 
 ## Run the Application
 
-### Zipkin
+```sh
+# from this directory
+npm start
+```
 
- - Run the sample
-
-   ```sh
-   $ # from this directory
-   $ npm run zipkin:basic
-   ```
-
-#### Zipkin UI
-Open the Zipkin UI in your browser [http://localhost:9411/zipkin](http://localhost:9411/zipkin)
-
-<p align="center"><img src="./images/zipkin-ui-list.png?raw=true"/></p>
-
-Select `basic-service` under *Service Name* and click on *Find Traces*.
-
-Click on the trace to view its details.
-
-<p align="center"><img src="./images/zipkin-ui-detail.png?raw=true"/></p>
-
-### Jaeger
-
- - Run the sample
-
-   ```sh
-   $ # from this directory
-   $ npm run jaeger:basic
-   ```
-
-#### Jaeger UI
+### Jaeger UI
 
 Open the Jaeger UI in your browser [http://localhost:16686](http://localhost:16686)
 
@@ -58,9 +33,12 @@ Click on the trace to view its details.
 <p align="center"><img src="./images/jaeger-ui-detail.png?raw=true"/></p>
 
 ## Useful links
+
 - For more information on OpenTelemetry, visit: <https://opentelemetry.io/>
-- For more information on tracing, visit: <https://github.com/open-telemetry/opentelemetry-js/tree/master/packages/opentelemetry-tracing>
+- For more information on tracing, visit: <https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/opentelemetry-sdk-trace-base>
 
 ## LICENSE
 
 Apache License 2.0
+
+[opentelemetry-collector-url]: https://github.com/open-telemetry/opentelemetry-exporter-otlp-http

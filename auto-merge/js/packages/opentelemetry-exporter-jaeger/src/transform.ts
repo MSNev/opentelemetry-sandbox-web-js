@@ -1,5 +1,5 @@
-/*!
- * Copyright 2019, OpenTelemetry Authors
+/*
+ * Copyright The OpenTelemetry Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { Link, CanonicalCode } from '@opentelemetry/types';
-import { ReadableSpan } from '@opentelemetry/tracing';
+import { Link, SpanStatusCode, SpanKind } from '@opentelemetry/api';
+import { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import {
   hrTimeToMilliseconds,
   hrTimeToMicroseconds,
@@ -40,8 +40,9 @@ const DEFAULT_FLAGS = 0x1;
  * @param span Span to be translated
  */
 export function spanToThrift(span: ReadableSpan): ThriftSpan {
-  const traceIdHigh = span.spanContext.traceId.slice(0, 16);
-  const traceIdLow = span.spanContext.traceId.slice(16);
+  const traceId = span.spanContext().traceId.padStart(32, '0');
+  const traceIdHigh = traceId.slice(0, 16);
+  const traceIdLow = traceId.slice(16);
   const parentSpan = span.parentSpanId
     ? Utils.encodeInt64(span.parentSpanId)
     : ThriftUtils.emptyBuffer;
@@ -49,21 +50,47 @@ export function spanToThrift(span: ReadableSpan): ThriftSpan {
   const tags = Object.keys(span.attributes).map(
     (name): Tag => ({ key: name, value: toTagValue(span.attributes[name]) })
   );
-  tags.push({ key: 'status.code', value: span.status.code });
-  tags.push({ key: 'status.name', value: CanonicalCode[span.status.code] });
-  if (span.status.message) {
-    tags.push({ key: 'status.message', value: span.status.message });
+  if (span.status.code !== SpanStatusCode.UNSET) {
+    tags.push({
+      key: 'otel.status_code',
+      value: SpanStatusCode[span.status.code],
+    });
+    if (span.status.message) {
+      tags.push({ key: 'otel.status_description', value: span.status.message });
+    }
   }
-  // Ensure that if Status.Code is not OK, that we set the "error" tag on the
+  // Ensure that if SpanStatus.Code is ERROR, that we set the "error" tag on the
   // Jaeger span.
-  if (span.status.code !== CanonicalCode.OK) {
+  if (span.status.code === SpanStatusCode.ERROR) {
     tags.push({ key: 'error', value: true });
   }
+
+  if (span.kind !== undefined && span.kind !== SpanKind.INTERNAL) {
+    tags.push({ key: 'span.kind', value: SpanKind[span.kind].toLowerCase() });
+  }
+  Object.keys(span.resource.attributes).forEach(name =>
+    tags.push({
+      key: name,
+      value: toTagValue(span.resource.attributes[name]),
+    })
+  );
+
+  if (span.instrumentationLibrary) {
+    tags.push({
+      key: 'otel.library.name',
+      value: toTagValue(span.instrumentationLibrary.name),
+    });
+    tags.push({
+      key: 'otel.library.version',
+      value: toTagValue(span.instrumentationLibrary.version),
+    });
+  }
+
   const spanTags: ThriftTag[] = ThriftUtils.getThriftTags(tags);
 
   const logs = span.events.map(
     (event): Log => {
-      const fields: Tag[] = [{ key: 'message.id', value: event.name }];
+      const fields: Tag[] = [{ key: 'event', value: event.name }];
       const attrs = event.attributes;
       if (attrs) {
         Object.keys(attrs).forEach(attr =>
@@ -78,11 +105,11 @@ export function spanToThrift(span: ReadableSpan): ThriftSpan {
   return {
     traceIdLow: Utils.encodeInt64(traceIdLow),
     traceIdHigh: Utils.encodeInt64(traceIdHigh),
-    spanId: Utils.encodeInt64(span.spanContext.spanId),
+    spanId: Utils.encodeInt64(span.spanContext().spanId),
     parentSpanId: parentSpan,
     operationName: span.name,
-    references: spanLinksToThriftRefs(span.links, span.parentSpanId),
-    flags: span.spanContext.traceFlags || DEFAULT_FLAGS,
+    references: spanLinksToThriftRefs(span.links),
+    flags: span.spanContext().traceFlags || DEFAULT_FLAGS,
     startTime: Utils.encodeInt64(hrTimeToMicroseconds(span.startTime)),
     duration: Utils.encodeInt64(hrTimeToMicroseconds(span.duration)),
     tags: spanTags,
@@ -93,21 +120,16 @@ export function spanToThrift(span: ReadableSpan): ThriftSpan {
 /** Translate OpenTelemetry {@link Link}s to Jaeger ThriftReference. */
 function spanLinksToThriftRefs(
   links: Link[],
-  parentSpanId?: string
 ): ThriftReference[] {
   return links
-    .map((link): ThriftReference | null => {
-      if (link.spanContext.spanId === parentSpanId) {
-        const refType = ThriftReferenceType.CHILD_OF;
-        const traceId = link.spanContext.traceId;
-        const traceIdHigh = Utils.encodeInt64(traceId.slice(0, 16));
-        const traceIdLow = Utils.encodeInt64(traceId.slice(16));
-        const spanId = Utils.encodeInt64(link.spanContext.spanId);
-        return { traceIdLow, traceIdHigh, spanId, refType };
-      }
-      return null;
-    })
-    .filter(ref => !!ref) as ThriftReference[];
+    .map((link): ThriftReference => {
+      const refType = ThriftReferenceType.FOLLOWS_FROM;
+      const traceId = link.context.traceId;
+      const traceIdHigh = Utils.encodeInt64(traceId.slice(0, 16));
+      const traceIdLow = Utils.encodeInt64(traceId.slice(16));
+      const spanId = Utils.encodeInt64(link.context.spanId);
+      return { traceIdLow, traceIdHigh, spanId, refType };
+    });
 }
 
 /** Translate OpenTelemetry attribute value to Jaeger TagValue. */

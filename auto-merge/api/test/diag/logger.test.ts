@@ -15,13 +15,18 @@
  */
 
 import * as assert from 'assert';
+import sinon = require('sinon');
 import { diag, DiagLogLevel } from '../../src';
-import {
-  DiagLogger,
-  createNoopDiagLogger,
-  diagLoggerFunctions,
-} from '../../src/diag/logger';
+import { createNoopDiagLogger } from '../../src/diag/internal/noopLogger';
+import { DiagLogger } from '../../src/diag/types';
 
+export const diagLoggerFunctions = [
+  'verbose',
+  'debug',
+  'info',
+  'warn',
+  'error',
+] as const;
 describe('DiagLogger functions', () => {
   const calledArgs: any = {
     error: null,
@@ -32,6 +37,12 @@ describe('DiagLogger functions', () => {
   };
 
   let dummyLogger: DiagLogger;
+
+  const restoreCallHistory = () => {
+    diagLoggerFunctions.forEach(fName => {
+      calledArgs[fName] = null;
+    });
+  };
 
   beforeEach(() => {
     // mock
@@ -44,10 +55,8 @@ describe('DiagLogger functions', () => {
   });
 
   afterEach(() => {
-    // restore
-    diagLoggerFunctions.forEach(fName => {
-      calledArgs[fName] = null;
-    });
+    restoreCallHistory();
+    diag.disable();
   });
 
   describe('constructor', () => {
@@ -68,8 +77,8 @@ describe('DiagLogger functions', () => {
       });
 
       it(`diag should log with ${fName} message`, () => {
-        diag.setLogger(dummyLogger);
-        diag.setLogLevel(DiagLogLevel.ALL);
+        diag.setLogger(dummyLogger, DiagLogLevel.ALL);
+        restoreCallHistory();
         diag[fName](`${fName} called %s`, 'param1');
         diagLoggerFunctions.forEach(lName => {
           if (fName === lName) {
@@ -89,6 +98,29 @@ describe('DiagLogger functions', () => {
         assert.ok(typeof testLogger[fName], 'function');
         testLogger[fName](`${fName} called %s`, 'param1');
       });
+    });
+  });
+
+  describe('diag is used as the diag logger in setLogger', () => {
+    it('should not throw', () => {
+      diag.setLogger(diag);
+    });
+
+    it('should use the previously registered logger to log the error', () => {
+      const error = sinon.stub();
+      diag.setLogger({
+        verbose: () => {},
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error,
+      });
+
+      sinon.assert.notCalled(error);
+
+      diag.setLogger(diag);
+
+      sinon.assert.calledOnce(error);
     });
   });
 });

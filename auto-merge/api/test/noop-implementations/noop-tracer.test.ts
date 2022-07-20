@@ -16,27 +16,28 @@
 
 import * as assert from 'assert';
 import {
-  NoopTracer,
+  context,
+  Span,
   SpanContext,
   SpanKind,
+  trace,
   TraceFlags,
-  context,
-  setSpanContext,
 } from '../../src';
-import { NoopSpan } from '../../src/trace/NoopSpan';
+import { NonRecordingSpan } from '../../src/trace/NonRecordingSpan';
+import { NoopTracer } from '../../src/trace/NoopTracer';
 
 describe('NoopTracer', () => {
   it('should not crash', () => {
     const tracer = new NoopTracer();
 
-    assert.ok(tracer.startSpan('span-name') instanceof NoopSpan);
+    assert.ok(tracer.startSpan('span-name') instanceof NonRecordingSpan);
     assert.ok(
       tracer.startSpan('span-name1', { kind: SpanKind.CLIENT }) instanceof
-        NoopSpan
+        NonRecordingSpan
     );
     assert.ok(
       tracer.startSpan('span-name2', { kind: SpanKind.CLIENT }) instanceof
-        NoopSpan
+        NonRecordingSpan
     );
   });
 
@@ -50,10 +51,34 @@ describe('NoopTracer', () => {
     const span = tracer.startSpan(
       'test-1',
       {},
-      setSpanContext(context.active(), parent)
+      trace.setSpanContext(context.active(), parent)
     );
-    assert(span.context().traceId === parent.traceId);
-    assert(span.context().spanId === parent.spanId);
-    assert(span.context().traceFlags === parent.traceFlags);
+    assert(span.spanContext().traceId === parent.traceId);
+    assert(span.spanContext().spanId === parent.spanId);
+    assert(span.spanContext().traceFlags === parent.traceFlags);
+  });
+
+  it('should accept 2 to 4 args and start an active span', () => {
+    const tracer = new NoopTracer();
+    const name = 'span-name';
+    const fn = (span: Span) => {
+      try {
+        return 1;
+      } finally {
+        span.end();
+      }
+    };
+    const opts = { attributes: { foo: 'bar' } };
+
+    assert.strictEqual((tracer as any).startActiveSpan(name), undefined);
+
+    assert.strictEqual(tracer.startActiveSpan(name, fn), 1);
+
+    assert.strictEqual(tracer.startActiveSpan(name, opts, fn), 1);
+
+    assert.strictEqual(
+      tracer.startActiveSpan(name, opts, context.active(), fn),
+      1
+    );
   });
 });

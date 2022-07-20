@@ -16,27 +16,34 @@
 
 import * as assert from 'assert';
 import api, {
-  TraceFlags,
-  NoopTracerProvider,
-  NoopTracer,
-  SpanOptions,
-  Span,
   context,
-  trace,
-  propagation,
-  TextMapPropagator,
   Context,
-  TextMapSetter,
-  TextMapGetter,
-  ROOT_CONTEXT,
-  defaultTextMapSetter,
   defaultTextMapGetter,
+  defaultTextMapSetter,
   diag,
-  diagLoggerFunctions,
+  propagation,
+  ROOT_CONTEXT,
+  Span,
+  SpanOptions,
+  TextMapGetter,
+  TextMapPropagator,
+  TextMapSetter,
+  trace,
+  TraceFlags,
 } from '../../src';
 import { DiagAPI } from '../../src/api/diag';
-import { _global } from '../../src/api/global-utils';
-import { NoopSpan } from '../../src/trace/NoopSpan';
+import { NonRecordingSpan } from '../../src/trace/NonRecordingSpan';
+import { NoopTracer } from '../../src/trace/NoopTracer';
+import { NoopTracerProvider } from '../../src/trace/NoopTracerProvider';
+
+// DiagLogger implementation
+const diagLoggerFunctions = [
+  'verbose',
+  'debug',
+  'info',
+  'warn',
+  'error',
+] as const;
 
 describe('API', () => {
   it('should expose a tracer provider via getTracerProvider', () => {
@@ -71,7 +78,7 @@ describe('API', () => {
       spanId: '6e0c63257de34c92',
       traceFlags: TraceFlags.NONE,
     };
-    const dummySpan = new NoopSpan(spanContext);
+    const dummySpan = new NonRecordingSpan(spanContext);
 
     beforeEach(() => {
       context.disable();
@@ -86,14 +93,26 @@ describe('API', () => {
       assert.deepStrictEqual(span, dummySpan);
     });
 
+    it('should set delegate only on success', () => {
+      assert.strictEqual(
+        api.trace.setGlobalTracerProvider(new TestTracerProvider()),
+        true
+      );
+      assert.strictEqual(
+        api.trace.setGlobalTracerProvider(new NoopTracerProvider()),
+        false
+      );
+      assert.ok(api.trace.getTracer('name') instanceof TestTracer);
+    });
+
     class TestTracer extends NoopTracer {
-      startSpan(name: string, options?: SpanOptions): Span {
+      override startSpan(name: string, options?: SpanOptions): Span {
         return dummySpan;
       }
     }
 
     class TestTracerProvider extends NoopTracerProvider {
-      getTracer(_name: string, version?: string) {
+      override getTracer(_name: string, version?: string) {
         return new TestTracer();
       }
     }
@@ -191,6 +210,7 @@ describe('API', () => {
 
     diagLoggerFunctions.forEach(fName => {
       it(`no argument logger ${fName} message doesn't throw`, () => {
+        //@ts-expect-error an undefined logger is not allowed
         diag.setLogger();
         assert.doesNotThrow(() => {
           diag[fName](`${fName} message`);
